@@ -23,6 +23,7 @@ st.markdown("""
   .filled-cell { background:#F5E8D2 !important; box-shadow: inset 3px 0 0 #A66A00; }
   .table-scroll { overflow:auto; max-height:440px; border:1px solid #9AA69E; margin-top:8px; }
   .legend-note { color:#4B5850; font-size:12.5px; margin-top:6px; }
+  .warn-note { color:#8C3B2E; font-size:12.5px; margin-top:6px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,6 +50,19 @@ def normalize(v):
     if v is None:
         return ""
     return str(v).strip().lower()
+
+
+def normalize_date(v):
+    """Parse a date string in (almost) any common format and return just the
+    calendar date, so '8/17/2026' and '2026-08-17T19:00:00' match each other.
+    Falls back to a plain trimmed/lowercased string if it can't be parsed."""
+    s = str(v).strip() if v is not None else ""
+    if s == "":
+        return ""
+    parsed = pd.to_datetime(s, errors="coerce")
+    if pd.isna(parsed):
+        return s.lower()
+    return parsed.date().isoformat()
 
 
 def is_empty(v):
@@ -100,7 +114,11 @@ if file_a and file_b:
 
     # ---------- Step 2: match keys ----------
     st.header("2. Set the match keys")
-    st.caption("Rows are matched when team and date agree in both files.")
+    st.caption(
+        "Rows are matched when team and date agree in both files. Dates are parsed "
+        "and compared as calendar dates, so different formats (e.g. '8/17/2026' vs "
+        "'2026-08-17T19:00:00') still match as long as the day is the same."
+    )
     c1, c2 = st.columns(2)
     with c1:
         team_col_a = st.selectbox(
@@ -165,13 +183,14 @@ if file_a and file_b:
 
         b_index = {}
         for _, row in df_b.iterrows():
-            key = (normalize(row[team_col_b]), normalize(row[date_col_b]))
+            key = (normalize(row[team_col_b]), normalize_date(row[date_col_b]))
             if key != ("", "") and key not in b_index:
                 b_index[key] = row
 
         filled_cells = set()
         matched = 0
         filled = 0
+        unmatched_rows = 0
         valid_mappings = [m for m in st.session_state.mappings if m["colA"] and m["colB"]]
 
         if not valid_mappings:
@@ -180,8 +199,9 @@ if file_a and file_b:
             for idx, row in result.iterrows():
                 if team_filter != "All teams" and normalize(row[team_col_a]) != normalize(team_filter):
                     continue
-                key = (normalize(row[team_col_a]), normalize(row[date_col_a]))
+                key = (normalize(row[team_col_a]), normalize_date(row[date_col_a]))
                 if key == ("", "") or key not in b_index:
+                    unmatched_rows += 1
                     continue
                 b_row = b_index[key]
                 row_matched = False
@@ -199,13 +219,14 @@ if file_a and file_b:
 
             st.session_state.result_df = result
             st.session_state.filled_cells = filled_cells
-            st.session_state.stats = {"matched": matched, "filled": filled}
+            st.session_state.stats = {"matched": matched, "filled": filled, "unmatched": unmatched_rows}
 
     if st.session_state.result_df is not None:
         stats = st.session_state.stats
-        s1, s2 = st.columns(2)
+        s1, s2, s3 = st.columns(3)
         s1.metric("Rows matched", stats["matched"])
         s2.metric("Cells filled", stats["filled"])
+        s3.metric("Rows with no match", stats["unmatched"])
 
         display_df = st.session_state.result_df
         if team_filter != "All teams":
